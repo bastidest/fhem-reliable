@@ -1,0 +1,14 @@
+version: '3.7'
+
+services:
+  fhem:
+    build:
+      dockerfile: ./Dockerfile
+      context: ./
+    working_dir: /opt/fhem
+    # command: perl fhem.pl fhem.cfg
+    volumes:
+      - ./fhem.cfg:/opt/fhem/fhem.cfg
+      - ./73_RELIABLE.pm:/opt/fhem/FHEM/73_RELIABLE.pm
+    ports:
+      - 8080:8083
