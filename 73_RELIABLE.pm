@@ -41,16 +41,18 @@ sub RELIABLE_Define($$) {
     my($a, $h) = parseParams($def);
     my @arguments = @{$a}[2..$#{$a}];
 
-    if(@arguments != 2) {
-	return "usage: RELIABLE <target_device> <target_reading>";
+    if(@arguments != 3) {
+	return "usage: RELIABLE <get_cmd> <set_cmd> <notify_cmd>";
     }
 
-    $hash->{TARGET_DEVICE} = $arguments[0];
-    $hash->{TARGET_READING} = $arguments[1];
+    $hash->{CMD_GET} = $arguments[0];
+    $hash->{CMD_SET} = $arguments[1];
+    $hash->{CMD_NOTIFY} = $arguments[2];
 
     $hash->{NOTIFYDEV} = "global";
     $hash->{RETRY_COUNT} = $RELIABLE_DEFAULT_RETRY_COUNT;
     $hash->{RETRY_INTERVAL} = $RELIABLE_DEFAULT_RETRY_INTERVAL;
+    $hash->{TRY_NR} = 0;
 
     RELIABLE_SetupAttrs($hash) if($init_done);
 
@@ -88,6 +90,18 @@ sub RELIABLE_Attr($$$$) {
 	}
     }
 
+    if($attrName eq "retryInterval") {
+	if($cmd eq "del") {
+	    $hash->{RETRY_INTERVAL} = $RELIABLE_DEFAULT_RETRY_INTERVAL;
+	} elsif($cmd eq "set") {
+	    if ($attrValue =~ /^\d+$/ && int($attrValue) > 10 && int($attrValue) < 3600) {
+		$hash->{RETRY_INTERVAL} = int($attrValue);
+	    } else {
+		return "retryCount must be an integer in the range [10,3600]";
+	    }
+	}
+    }
+
     return undef;
 }
 
@@ -110,15 +124,18 @@ sub RELIABLE_SetTimer($$$) {
 sub RELIABLE_TrySet($) {
     my ($hash) = @_;
 
-    Log3 $hash->{NAME}, 3, "try set";
+    my $tryNr = ++$hash->{TRY_NR};
+    
+    Log3 $hash->{NAME}, 5, "try set #$tryNr";
+    $hash->{STATE} = "cmd_try_$tryNr";
 
     my $argString = join(" ", @{$hash->{SET_ARGS}});
-    my $setCmd = "set $hash->{TARGET_DEVICE} $hash->{TARGET_READING} $argString";
-    Log3 $hash->{NAME}, 3, "set command: $setCmd";
+    my $setCmd = ($hash->{CMD_SET} =~ s/\$val/$argString/re);
+    Log3 $hash->{NAME}, 5, "set command: $setCmd";
     my $result = AnalyzeCommandChain(undef, $setCmd);
 
     if($result) {
-	Log3 $hash->{NAME}, 3, "non-zero return code when executing set command: $result";
+	Log3 $hash->{NAME}, 5, "non-zero return code when executing set command: $result";
 	$hash->{STATE} = "cmd_fail_hard";
 	return;
     }
@@ -127,36 +144,61 @@ sub RELIABLE_TrySet($) {
     RELIABLE_SetTimer($hash, "RELIABLE_CheckVal_Timer", $RELIABLE_CHECK_DELAY);
 }
 
-sub RELIABLE_IsStateDone($) {
+sub RELIABLE_NotifyFail($) {
     my ($hash) = @_;
+    
+    my $result = AnalyzeCommandChain(undef, $hash->{CMD_NOTIFY});
 
-    Log3 $hash->{NAME}, 3, "check val";
-
-    # try again next time
-    RELIABLE_SetTimer($hash, "RELIABLE_TrySet_Timer", $hash->{RETRY_INTERVAL} - $RELIABLE_CHECK_DELAY);
+    if($result) {
+	Log3 $hash->{NAME}, 5, "non-zero return code when executing notify command: $result";
+    }
 }
 
 sub RELIABLE_CheckVal($) {
     my ($hash) = @_;
 
-    Log3 $hash->{NAME}, 3, "check val";
+    my $shouldVal = join(" ", @{$hash->{SET_ARGS}});
 
-    # try again next time
-    RELIABLE_SetTimer($hash, "RELIABLE_TrySet_Timer", $hash->{RETRY_INTERVAL} - $RELIABLE_CHECK_DELAY);
+    if($hash->{CMD_GET} =~ /(.+):(.+)/) {
+	# use readings val
+	my $targetDevice = $1;
+	my $targetReading = $2;
+
+	my $isVal = ReadingsVal($targetDevice, $targetReading, undef);
+
+	Log3 $hash->{NAME}, 4, "check val, is=$isVal, should=$shouldVal";
+
+	if($isVal eq $shouldVal) {
+	    Log3 $hash->{NAME}, 5, "end condition met";
+	    $hash->{STATE} = "success";
+	} else {
+	    if($hash->{TRY_NR} < $hash->{RETRY_COUNT}) {
+		# try again next time
+		RELIABLE_SetTimer($hash, "RELIABLE_TrySet_Timer", $hash->{RETRY_INTERVAL} - $RELIABLE_CHECK_DELAY);
+	    } else {
+		# call notification function
+		$hash->{STATE} = "cmd_fail_soft";
+		RELIABLE_NotifyFail($hash);
+	    }
+	}
+    }
+
+    # cases other than checking reading values are not supported yet
 }
 
 sub RELIABLE_Set ($$@) {
     my ($hash, $name, $cmd, @args) = @_;
 
     if($cmd eq "?") {
-	return $hash->{TARGET_READING};
+	return "target";
     }
 
-    if($cmd ne $hash->{TARGET_READING}) {
-	return "can only set '$hash->{TARGET_READING}'";
+    if($cmd ne "target") {
+	return "can only set 'target'";
     }
     
     $hash->{SET_ARGS} = \@args;
+    $hash->{TRY_NR} = 0;
     RELIABLE_TrySet($hash);
 
     return undef;
