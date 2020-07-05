@@ -168,8 +168,8 @@ sub RELIABLE_NotifyFail($) {
     }
 }
 
-sub RELIABLE_CheckVal($) {
-    my ($hash) = @_;
+sub RELIABLE_CheckVal($$) {
+    my ($hash, $trySetNow) = @_;
 
     my $shouldVal = join(" ", @{$hash->{SET_ARGS}});
 
@@ -190,7 +190,11 @@ sub RELIABLE_CheckVal($) {
 	} else {
 	    if($hash->{TRY_NR} < $hash->{RETRY_COUNT}) {
 		# try again next time
-		RELIABLE_SetTimer($hash, "RELIABLE_TrySet_Timer", $hash->{RETRY_INTERVAL} - $RELIABLE_CHECK_DELAY);
+		if($trySetNow) {
+		    RELIABLE_TrySet($hash);
+		} else {
+		    RELIABLE_SetTimer($hash, "RELIABLE_TrySet_Timer", $hash->{RETRY_INTERVAL} - $RELIABLE_CHECK_DELAY);
+		}
 	    } else {
 		# call notification function
 		readingsBeginUpdate($hash);
@@ -226,14 +230,14 @@ sub RELIABLE_TrySet_Timer($) {
     my ($calltype, $name) = split(':', $_[0]);
     my $hash = $defs{$name};
 
-    RELIABLE_TrySet($hash);
+    RELIABLE_CheckVal($hash, 1);
 }
 
 sub RELIABLE_CheckVal_Timer($) {
     my ($calltype, $name) = split(':', $_[0]);
     my $hash = $defs{$name};
 
-    RELIABLE_CheckVal($hash);
+    RELIABLE_CheckVal($hash, 0);
 }
 
 1;
