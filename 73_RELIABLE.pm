@@ -7,6 +7,12 @@ my $RELIABLE_DEFAULT_RETRY_COUNT = 10;
 my $RELIABLE_DEFAULT_RETRY_INTERVAL = 60;
 my $RELIABLE_CHECK_DELAY = 5;
 
+sub RELIABLE_Log($$$) {
+    my ($hash, $verbosity, $msg) = @_;
+    
+    Log3 $hash->{NAME}, $verbosity, "RELIABLE $hash->{NAME}: $msg";
+}
+
 sub RELIABLE_Initialize($) {
     my ($hash) = @_;
 
@@ -16,7 +22,7 @@ sub RELIABLE_Initialize($) {
     # $hash->{UndefFn}  = "RELIABLE_Undef";
     $hash->{SetFn}    = "RELIABLE_Set";
     $hash->{AttrFn}   = "RELIABLE_Attr";
-    $hash->{AttrList} = "retryInterval retryCount";
+    $hash->{AttrList} = "retryInterval retryCount " . $readingFnAttributes;
 }
 
 sub RELIABLE_SetupAttrs($) {
@@ -32,6 +38,11 @@ sub RELIABLE_SetupAttrs($) {
 
     if($ri) {
 	$hash->{RETRY_INTERVAL} = $ri;
+    }
+
+    if($init_done && !defined($hash->{OLDDEF}))
+    {
+	$attr{$name}{"stateFormat"} = '{ ReadingsVal($name, "status", undef) . " #" . InternalVal($name, "TRY_NR", undef) }';
     }
 }
 
@@ -116,9 +127,8 @@ sub RELIABLE_SetTimer($$$) {
     
     RemoveInternalTimer("update:$name");
     InternalTimer($nextTrigger, $targetFn, "update:$name", 0);
-    
-    Log3 $name, 5, "$name: will call $targetFn in " . 
-	sprintf ("%.1f", $nextTrigger - $now) . " seconds at $hash->{TRIGGERTIME_FMT}";
+
+    RELIABLE_Log($hash, 5, "$name: will call $targetFn in " . sprintf ("%.1f", $nextTrigger - $now) . " seconds at $hash->{TRIGGERTIME_FMT}");
 }
 
 sub RELIABLE_TrySet($) {
@@ -126,17 +136,21 @@ sub RELIABLE_TrySet($) {
 
     my $tryNr = ++$hash->{TRY_NR};
     
-    Log3 $hash->{NAME}, 5, "try set #$tryNr";
-    $hash->{STATE} = "cmd_try_$tryNr";
+    RELIABLE_Log($hash, 5, "try set #$tryNr");
+    readingsBeginUpdate($hash);
+    readingsBulkUpdate($hash, "status", "cmd_try_$tryNr");
+    readingsEndUpdate($hash, 1);
 
     my $argString = join(" ", @{$hash->{SET_ARGS}});
     my $setCmd = ($hash->{CMD_SET} =~ s/\$val/$argString/re);
-    Log3 $hash->{NAME}, 5, "set command: $setCmd";
+    RELIABLE_Log($hash, 5, "set command: $setCmd");
     my $result = AnalyzeCommandChain(undef, $setCmd);
 
     if($result) {
-	Log3 $hash->{NAME}, 5, "non-zero return code when executing set command: $result";
-	$hash->{STATE} = "cmd_fail_hard";
+	RELIABLE_Log($hash, 3, "non-zero return code when executing set command: $result");
+	readingsBeginUpdate($hash);
+	readingsBulkUpdate($hash, "status", "cmd_fail_hard");
+	readingsEndUpdate($hash, 1);
 	return;
     }
 
@@ -150,7 +164,7 @@ sub RELIABLE_NotifyFail($) {
     my $result = AnalyzeCommandChain(undef, $hash->{CMD_NOTIFY});
 
     if($result) {
-	Log3 $hash->{NAME}, 5, "non-zero return code when executing notify command: $result";
+	RELIABLE_Log($hash, 3, "non-zero return code when executing notify command: $result");
     }
 }
 
@@ -166,18 +180,22 @@ sub RELIABLE_CheckVal($) {
 
 	my $isVal = ReadingsVal($targetDevice, $targetReading, undef);
 
-	Log3 $hash->{NAME}, 4, "check val, is=$isVal, should=$shouldVal";
+	RELIABLE_Log($hash, 4, "check val, is=$isVal, should=$shouldVal");
 
 	if($isVal eq $shouldVal) {
-	    Log3 $hash->{NAME}, 5, "end condition met";
-	    $hash->{STATE} = "success";
+	    RELIABLE_Log($hash, 4, "end condition met");
+	    readingsBeginUpdate($hash);
+	    readingsBulkUpdate($hash, "status", "cmd_success");
+	    readingsEndUpdate($hash, 1);
 	} else {
 	    if($hash->{TRY_NR} < $hash->{RETRY_COUNT}) {
 		# try again next time
 		RELIABLE_SetTimer($hash, "RELIABLE_TrySet_Timer", $hash->{RETRY_INTERVAL} - $RELIABLE_CHECK_DELAY);
 	    } else {
 		# call notification function
-		$hash->{STATE} = "cmd_fail_soft";
+		readingsBeginUpdate($hash);
+		readingsBulkUpdate($hash, "status", "cmd_fail_soft");
+		readingsEndUpdate($hash, 1);
 		RELIABLE_NotifyFail($hash);
 	    }
 	}
