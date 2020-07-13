@@ -42,7 +42,7 @@ sub RELIABLE_SetupAttrs($) {
 
     if($init_done && !defined($hash->{OLDDEF}))
     {
-	$attr{$name}{"stateFormat"} = '{ ReadingsVal($name, "status", undef) . " #" . InternalVal($name, "TRY_NR", undef) }';
+	$attr{$name}{"stateFormat"} = '{ ReadingsVal($name, "status", undef) . " #" . InternalVal($name, "TRY_NR", undef) . "/" . InternalVal($name, "RETRY_COUNT", undef) }';
     }
 }
 
