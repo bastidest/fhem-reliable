@@ -160,8 +160,23 @@ sub RELIABLE_TrySet($) {
 
 sub RELIABLE_NotifyFail($) {
     my ($hash) = @_;
-    
-    my $result = AnalyzeCommandChain(undef, $hash->{CMD_NOTIFY});
+
+    my $cmd = $hash->{CMD_NOTIFY};
+
+    my $result = undef;
+	
+    if($cmd =~ /^\s*\{.*\}\s*$/) {
+	RELIABLE_Log($hash, 5, "Executing perl notify command: $cmd");
+	
+	my %specials = (
+	    "%RETRY_COUNT" => $hash->{RETRY_COUNT},
+	    "%SET_ARGS" => join(" ", @{$hash->{SET_ARGS}}),
+	);
+	$result = AnalyzeCommandChain(undef, EvalSpecials($cmd, %specials));
+    } else {
+	RELIABLE_Log($hash, 5, "Executing fhem notify command: $cmd");
+	$result = AnalyzeCommandChain(undef, $cmd);
+    }
 
     if($result) {
 	RELIABLE_Log($hash, 3, "non-zero return code when executing notify command: $result");
